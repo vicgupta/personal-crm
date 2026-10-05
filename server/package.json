@@ -18,7 +18,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "set-password": "node set-password.mjs"
   },
   "type": "module",
   "version": "1.0.0"

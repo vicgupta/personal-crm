@@ -1,1 +1,18 @@
-{"description":"Personal CRM — a local, single-user sales CRM (Vite + React + TypeScript frontend, Express + SQLite backend)","devDependencies":{"concurrently":"^9.1.0"},"name":"personal-crm","private":true,"scripts":{"build":"npm run build -w client","dev":"concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"","test":"npm run test -w server && npm run test -w client"},"version":"1.0.0","workspaces":["server","client"]}
+{
+  "description": "Personal CRM \u2014 a local, single-user sales CRM (Vite + React + TypeScript frontend, Express + SQLite backend)",
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  },
+  "name": "personal-crm",
+  "private": true,
+  "scripts": {
+    "build": "npm run build -w client",
+    "dev": "concurrently -n server,client -c blue,green \"CRM_AUTH_DISABLED=true npm run dev -w server\" \"npm run dev -w client\"",
+    "test": "npm run test -w server && npm run test -w client"
+  },
+  "version": "1.0.0",
+  "workspaces": [
+    "server",
+    "client"
+  ]
+}

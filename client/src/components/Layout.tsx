@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Building2, Users, Briefcase, Columns3 } from 'lucide-react';
+import { LayoutDashboard, Building2, Users, Briefcase, Columns3, LogOut } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 const NAV = [
@@ -10,7 +10,15 @@ const NAV = [
   { to: '/pipeline', label: 'Pipeline', icon: <Columns3 /> },
 ];
 
-export default function Layout({ children }: { children: ReactNode }) {
+export default function Layout({
+  children,
+  username,
+  onLogout,
+}: {
+  children: ReactNode;
+  username?: string | null;
+  onLogout?: () => void;
+}) {
   return (
     <div className="app">
       <aside className="sidebar">
@@ -31,6 +39,15 @@ export default function Layout({ children }: { children: ReactNode }) {
             </NavLink>
           ))}
         </nav>
+        {onLogout && (
+          <div className="sidebar-user">
+            {username && <span className="sidebar-username">{username}</span>}
+            <button className="nav-item logout-btn" onClick={onLogout} title="Sign out">
+              <LogOut />
+              Sign out
+            </button>
+          </div>
+        )}
       </aside>
       <main className="main">{children}</main>
     </div>

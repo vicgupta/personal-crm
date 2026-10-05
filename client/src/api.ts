@@ -63,6 +63,19 @@ export interface ActivityInput {
 }
 
 export const api = {
+  auth: {
+    me: async (): Promise<{ authenticated: boolean; username?: string; authDisabled?: boolean }> => {
+      const res = await fetch(BASE + '/me');
+      if (res.status === 401) return { authenticated: false };
+      return (await res.json()) as { authenticated: boolean; username?: string; authDisabled?: boolean };
+    },
+    login: (username: string, password: string) =>
+      req<{ ok: boolean; username: string }>('/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }),
+    logout: () => req<{ ok: boolean }>('/logout', { method: 'POST' }),
+  },
   organizations: {
     list: (search?: string) =>
       req<Organization[]>(`/organizations${search ? `?search=${encodeURIComponent(search)}` : ''}`),

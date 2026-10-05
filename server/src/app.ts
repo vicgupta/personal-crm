@@ -4,6 +4,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import {
+  clearSessionCookie,
+  getSessionToken,
+  loginRateLimit,
+  requireAuth,
+  sessionCookie,
+  verifyPassword,
+  type AuthState,
+} from './auth.js';
+import {
   STAGES,
   STAGE_PROBABILITY,
   CONTACT_STATUSES,
@@ -30,12 +39,46 @@ function resolveCloseDate(stage: string, closeDate: string): string {
   return closeDate;
 }
 
-export function createApp(db: DatabaseSync) {
+export function createApp(db: DatabaseSync, auth?: AuthState | null) {
   const app = express();
   app.use(cors());
   app.use(express.json());
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  // ---------------- authentication ----------------
+  // Public auth endpoints; everything else under /api is protected when enabled.
+  app.get('/api/me', (req, res) => {
+    if (!auth?.config.enabled) return res.json({ authenticated: false, authDisabled: true });
+    const s = auth.store.get(getSessionToken(req));
+    if (!s) return res.status(401).json({ error: 'not authenticated' });
+    res.json({ authenticated: true, username: s.username });
+  });
+
+  if (auth?.config.enabled) {
+    const limiter = loginRateLimit();
+    app.post('/api/login', limiter, (req, res) => {
+      const { username = '', password = '' } = req.body ?? {};
+      if (
+        String(username) === auth.config.username &&
+        verifyPassword(String(password), auth.config.passwordHash)
+      ) {
+        const token = auth.store.create(auth.config.username);
+        res.setHeader('Set-Cookie', sessionCookie(token));
+        return res.json({ ok: true, username: auth.config.username });
+      }
+      return res.status(401).json({ error: 'invalid username or password' });
+    });
+
+    app.post('/api/logout', (req, res) => {
+      auth.store.revoke(getSessionToken(req));
+      res.setHeader('Set-Cookie', clearSessionCookie);
+      res.json({ ok: true });
+    });
+
+    // Everything registered below under /api requires a valid session.
+    app.use('/api', requireAuth(auth.store));
+  }
 
   // ---------------- organizations ----------------
   app.get('/api/organizations', (req, res) => {
