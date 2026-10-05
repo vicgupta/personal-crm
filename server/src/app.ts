@@ -6,6 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import {
   clearSessionCookie,
   getSessionToken,
+  getUser,
   loginRateLimit,
   requireAuth,
   sessionCookie,
@@ -41,6 +42,9 @@ function resolveCloseDate(stage: string, closeDate: string): string {
 
 export function createApp(db: DatabaseSync, auth?: AuthState | null) {
   const app = express();
+  // Behind Caddy (TLS terminator) in production: trust X-Forwarded-* so
+  // req.ip is the real client (rate limiter) and req.secure reflects HTTPS.
+  app.set('trust proxy', 1);
   app.use(cors());
   app.use(express.json());
 
@@ -49,23 +53,22 @@ export function createApp(db: DatabaseSync, auth?: AuthState | null) {
   // ---------------- authentication ----------------
   // Public auth endpoints; everything else under /api is protected when enabled.
   app.get('/api/me', (req, res) => {
-    if (!auth?.config.enabled) return res.json({ authenticated: false, authDisabled: true });
+    if (!auth) return res.json({ authenticated: false, authDisabled: true });
     const s = auth.store.get(getSessionToken(req));
     if (!s) return res.status(401).json({ error: 'not authenticated' });
     res.json({ authenticated: true, username: s.username });
   });
 
-  if (auth?.config.enabled) {
+  if (auth) {
     const limiter = loginRateLimit();
     app.post('/api/login', limiter, (req, res) => {
       const { username = '', password = '' } = req.body ?? {};
-      if (
-        String(username) === auth.config.username &&
-        verifyPassword(String(password), auth.config.passwordHash)
-      ) {
-        const token = auth.store.create(auth.config.username);
-        res.setHeader('Set-Cookie', sessionCookie(token));
-        return res.json({ ok: true, username: auth.config.username });
+      const user = getUser(auth.db, String(username).trim());
+      if (user && verifyPassword(String(password), user.password_hash)) {
+        const secure = req.secure || req.get('x-forwarded-proto') === 'https';
+        const token = auth.store.create(user.username);
+        res.setHeader('Set-Cookie', sessionCookie(token, secure));
+        return res.json({ ok: true, username: user.username });
       }
       return res.status(401).json({ error: 'invalid username or password' });
     });

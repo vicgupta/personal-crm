@@ -2,14 +2,26 @@ import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import { openDatabase } from '../src/db.js';
 import { createApp } from '../src/app.js';
-import { hashPassword, SessionStore, type AuthState } from '../src/auth.js';
+import {
+  hashPassword,
+  verifyPassword,
+  SessionStore,
+  ensureUsersTable,
+  countUsers,
+  getUser,
+  createUser,
+  setUserPassword,
+  deleteUser,
+  listUsers,
+  initAuth,
+  type AuthState,
+} from '../src/auth.js';
 
 function authedApp() {
   const db = openDatabase(':memory:');
-  const auth: AuthState = {
-    config: { enabled: true, username: 'tester', passwordHash: hashPassword('s3cret-pass') },
-    store: new SessionStore(),
-  };
+  ensureUsersTable(db);
+  createUser(db, 'tester', hashPassword('s3cret-pass'));
+  const auth: AuthState = { store: new SessionStore(), db };
   return request(createApp(db, auth));
 }
 
@@ -62,12 +74,67 @@ describe('authentication', () => {
     expect((await app.get('/api/organizations').set('Cookie', cookie)).status).toBe(401);
   });
 
-  it('hashes and verifies passwords (wrong password fails, tampered hash fails)', async () => {
-    const { verifyPassword } = await import('../src/auth.js');
+  it('hashes and verifies passwords (wrong password fails, tampered hash fails)', () => {
     const hash = hashPassword('another-secret');
     expect(verifyPassword('another-secret', hash)).toBe(true);
     expect(verifyPassword('another-secreu', hash)).toBe(false);
     expect(verifyPassword('another-secret', 'scrypt$dead$beef')).toBe(false);
     expect(verifyPassword('another-secret', 'not-a-hash')).toBe(false);
+  });
+});
+
+describe('user store', () => {
+  it('creates, lists, updates and deletes users', () => {
+    const db = openDatabase(':memory:');
+    ensureUsersTable(db);
+    expect(countUsers(db)).toBe(0);
+
+    createUser(db, 'alice', hashPassword('pw1'));
+    createUser(db, 'bob', hashPassword('pw2'));
+    expect(countUsers(db)).toBe(2);
+    expect(listUsers(db).map((u) => u.username)).toEqual(['alice', 'bob']);
+
+    const alice = getUser(db, 'alice');
+    expect(alice).not.toBeNull();
+    expect(verifyPassword('pw1', alice!.password_hash)).toBe(true);
+
+    expect(setUserPassword(db, 'alice', hashPassword('newpw'))).toBe(true);
+    expect(verifyPassword('newpw', getUser(db, 'alice')!.password_hash)).toBe(true);
+    expect(setUserPassword(db, 'nobody', hashPassword('x'))).toBe(false);
+
+    expect(() => createUser(db, 'alice', hashPassword('x'))).toThrow();
+
+    expect(deleteUser(db, 'bob')).toBe(true);
+    expect(deleteUser(db, 'bob')).toBe(false);
+    expect(countUsers(db)).toBe(1);
+  });
+
+  it('initAuth bootstraps the first user from CRM_PASSWORD_HASH', () => {
+    const db = openDatabase(':memory:');
+    const env = { CRM_PASSWORD_HASH: hashPassword('boot-pass'), CRM_USERNAME: 'vic' };
+    const auth = initAuth(db, env);
+    expect(auth).not.toBeNull();
+    expect(countUsers(db)).toBe(1);
+    const user = getUser(db, 'vic');
+    expect(user).not.toBeNull();
+    expect(verifyPassword('boot-pass', user!.password_hash)).toBe(true);
+  });
+
+  it('initAuth uses existing DB users and ignores the env hash', () => {
+    const db = openDatabase(':memory:');
+    ensureUsersTable(db);
+    createUser(db, 'existing', hashPassword('db-pass'));
+    const env = { CRM_PASSWORD_HASH: hashPassword('env-pass'), CRM_USERNAME: 'vic' };
+    const auth = initAuth(db, env);
+    expect(auth).not.toBeNull();
+    expect(countUsers(db)).toBe(1);
+    expect(getUser(db, 'existing')).not.toBeNull();
+    expect(getUser(db, 'vic')).toBeNull();
+  });
+
+  it('initAuth throws when no users and no hash, returns null when disabled', () => {
+    const db = openDatabase(':memory:');
+    expect(() => initAuth(db, {})).toThrow(/No login users/);
+    expect(initAuth(db, { CRM_AUTH_DISABLED: 'true' })).toBeNull();
   });
 });

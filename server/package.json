@@ -19,7 +19,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "test": "vitest run",
-    "set-password": "node set-password.mjs"
+    "user": "tsx src/users-cli.ts"
   },
   "type": "module",
   "version": "1.0.0"

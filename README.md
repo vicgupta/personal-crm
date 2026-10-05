@@ -24,24 +24,28 @@ database, stop the app and delete `server/data/crm.db`.
 
 ## Login & security
 
-The server supports a single-user login (username + password, session cookie).
+The server supports username + password login (session cookie). Credentials are
+stored as scrypt hashes in the SQLite `users` table — never in plaintext, never
+in environment files.
 
 - **Local development:** `npm run dev` sets `CRM_AUTH_DISABLED=true`, so no login
   is needed while developing.
-- **Production:** set these environment variables (e.g. in a systemd `EnvironmentFile`):
-  - `CRM_USERNAME` — login username (default: `vic`)
-  - `CRM_PASSWORD_HASH` — scrypt hash of the password (see below)
-- If neither `CRM_PASSWORD_HASH` nor `CRM_AUTH_DISABLED=true` is set, the server
-  **refuses to start** rather than running open.
-- To set or rotate the password: `cd server && npm run set-password`
-  (prompts twice, stores only the hash in `server/.env`, mode 600).
+- **Production:** the server refuses to start unless at least one user exists in
+  the database. Manage users from the `server/` directory:
+  - `npm run user list` — show login users
+  - `npm run user add <username>` — create a user (prompts for password)
+  - `npm run user set-password <username>` — rotate a password
+  - `npm run user remove <username>` — remove a user (refuses to remove the last one)
+- **First-time bootstrap:** if the `users` table is empty and `CRM_PASSWORD_HASH`
+  (+ optional `CRM_USERNAME`, default `vic`) is set, the server creates that user
+  once at startup. This is the migration path from env-file auth.
+- All `/api` routes except `/api/health`, `/api/login`, `/api/logout`, and `/api/me`
+  require a valid session. The login endpoint is rate-limited (10 attempts per
+  10 minutes per IP). Session cookies are `HttpOnly`, `SameSite=Lax`, and marked
+  `Secure` when served over HTTPS.
 
-All `/api` routes except `/api/health`, `/api/login`, `/api/logout`, and `/api/me`
-require a valid session. The login endpoint is rate-limited (10 attempts per
-10 minutes per IP).
-
-> Note: the app is served over plain HTTP. Credentials are protected in transit
-> only if you put TLS in front of it (reverse proxy with a certificate).
+The production deployment sits behind Caddy, which terminates TLS:
+**https://nova.kantsy.com** (the app itself listens on localhost:4000 only).
 
 ## Scripts
 

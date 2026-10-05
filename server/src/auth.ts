@@ -1,35 +1,94 @@
 import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
-
-export interface AuthConfig {
-  enabled: boolean;
-  username: string;
-  /** "scrypt$<saltHex>$<derivedHex>" */
-  passwordHash: string;
-}
+import type { DatabaseSync } from 'node:sqlite';
 
 export interface AuthState {
-  config: AuthConfig;
   store: SessionStore;
+  db: DatabaseSync;
+}
+
+/** True when the server should run with no login (local development only). */
+export function authDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return String(env.CRM_AUTH_DISABLED ?? '').toLowerCase() === 'true';
+}
+
+// ---------------------------------------------------------------------------
+// User store (SQLite)
+// ---------------------------------------------------------------------------
+
+export interface UserRow {
+  id: number;
+  username: string;
+  password_hash: string;
+  created_at: string;
+}
+
+export function ensureUsersTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+export function countUsers(db: DatabaseSync): number {
+  return (db.prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }).c;
+}
+
+export function getUser(db: DatabaseSync, username: string): UserRow | null {
+  return (db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined) ?? null;
+}
+
+export function listUsers(db: DatabaseSync): Array<Pick<UserRow, 'id' | 'username' | 'created_at'>> {
+  return db.prepare('SELECT id, username, created_at FROM users ORDER BY id').all() as Array<
+    Pick<UserRow, 'id' | 'username' | 'created_at'>
+  >;
+}
+
+export function createUser(db: DatabaseSync, username: string, passwordHash: string): void {
+  db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(username, passwordHash);
+}
+
+export function setUserPassword(db: DatabaseSync, username: string, passwordHash: string): boolean {
+  const r = db.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(passwordHash, username);
+  return r.changes > 0;
+}
+
+export function deleteUser(db: DatabaseSync, username: string): boolean {
+  const r = db.prepare('DELETE FROM users WHERE username = ?').run(username);
+  return r.changes > 0;
 }
 
 /**
- * Fail-secure configuration: auth is enabled when CRM_PASSWORD_HASH is set.
- * Local dev can opt out explicitly with CRM_AUTH_DISABLED=true.
- * Anything else is a startup error — never silently run open.
+ * Fail-secure auth initialization against the database.
+ *
+ * - CRM_AUTH_DISABLED=true → null (no auth, local development only).
+ * - Empty users table + CRM_PASSWORD_HASH set → one-time bootstrap of the
+ *   initial user from the environment (migration path from env-file auth).
+ * - Empty users table + no hash → throws with instructions (never runs open).
+ * - Otherwise → auth state backed by the users table.
  */
-export function authConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AuthConfig {
-  const hash = (env.CRM_PASSWORD_HASH ?? '').trim();
-  const disabled = String(env.CRM_AUTH_DISABLED ?? '').toLowerCase() === 'true';
-  if (hash) {
-    const username = (env.CRM_USERNAME ?? 'vic').trim() || 'vic';
-    return { enabled: true, username, passwordHash: hash };
+export function initAuth(db: DatabaseSync, env: NodeJS.ProcessEnv = process.env): AuthState | null {
+  if (authDisabledByEnv(env)) return null;
+  ensureUsersTable(db);
+  if (countUsers(db) === 0) {
+    const hash = (env.CRM_PASSWORD_HASH ?? '').trim();
+    if (hash) {
+      const username = (env.CRM_USERNAME ?? 'vic').trim() || 'vic';
+      createUser(db, username, hash);
+      console.log(`Bootstrapped login user "${username}" from CRM_PASSWORD_HASH into the database.`);
+    } else {
+      throw new Error(
+        'No login users in the database and CRM_PASSWORD_HASH is not set. ' +
+          'Create one with: npm run user add <username> (from the server directory), ' +
+          'or run with CRM_AUTH_DISABLED=true for local development only.',
+      );
+    }
   }
-  if (disabled) return { enabled: false, username: '', passwordHash: '' };
-  throw new Error(
-    'Auth is not configured: set CRM_PASSWORD_HASH to enable login, ' +
-      'or CRM_AUTH_DISABLED=true to run without auth (local development only).',
-  );
+  return { store: new SessionStore(), db };
 }
 
 export function hashPassword(password: string): string {
@@ -97,9 +156,12 @@ export function getSessionToken(req: Request): string | undefined {
   return undefined;
 }
 
-export function sessionCookie(token: string): string {
+export function sessionCookie(token: string, secure = false): string {
   const maxAge = Math.floor(SESSION_TTL_MS / 1000);
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
+  return (
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}` +
+    (secure ? '; Secure' : '')
+  );
 }
 
 export const clearSessionCookie = `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
